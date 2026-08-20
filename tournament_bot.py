@@ -32,8 +32,9 @@ def keep_alive():
 TOKEN = os.environ.get("BOT_TOKEN", "YOUR_BOT_TOKEN_HERE")
 ADMIN_ID = 7190437569
 
-JOIN_BONUS = 10.0   # নতুন ইউজার পাবে ১০ টাকা (লকড বোনাস)
-REFER_BONUS = 3.0   # প্রতি রেফারে পাবে ৩ টাকা
+JOIN_BONUS = 50.0   # সাইনআপ বোনাস ৫০ টাকা
+MIN_DEPOSIT = 50.0  # মিনিমাম ডিপোজিট শর্ত ৫০ টাকা
+REFER_BONUS = 5.0   # প্রতি রেফারে ৫ টাকা
 
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 
@@ -41,7 +42,6 @@ logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s
 def init_db():
     conn = sqlite3.connect("database.db")
     cursor = conn.cursor()
-    # has_deposited: 0 = নো ডিপোজিট, 1 = ডিপোজিট করেছে
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS users (
             user_id INTEGER PRIMARY KEY,
@@ -86,11 +86,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if ref_id != user_id:
                 referred_by = ref_id
         
-        # নতুন ইউজারকে ১০ টাকা বোনাস দেওয়া (has_deposited = 0)
+        # নতুন ইউজারকে ৫০ টাকা বোনাস
         cursor.execute("INSERT INTO users (user_id, balance, has_deposited, referred_by) VALUES (?, ?, 0, ?)", 
                        (user_id, JOIN_BONUS, referred_by))
         
-        welcome_text = f"🎉 **স্বাগতম!** আপনি পেয়েছেন ৳{JOIN_BONUS:.2f} সাইনআপ বোনাস!\n⚠️ *নোট: বোনাস ব্যবহার করার জন্য অন্তত একবার ডিপোজিট করতে হবে।*\n"
+        welcome_text = (
+            f"🎉 **স্বাগতম!** আপনি পেয়েছেন ৳{JOIN_BONUS:.2f} সাইনআপ বোনাস!\n\n"
+            f"⚠️ **শর্ত:** এই বোনাসটি আনলক করতে এবং ম্যাচ খেলে উইথড্র দিতে অন্তত **৳{MIN_DEPOSIT:.2f}** ডিপোজিট করতে হবে।\n"
+        )
         
         if referred_by:
             cursor.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (REFER_BONUS, referred_by))
@@ -135,9 +138,16 @@ async def wallet(update: Update, context: ContextTypes.DEFAULT_TYPE):
     balance = row[0] if row else 0.0
     has_deposited = row[1] if row else 0
     
-    status = "✅ Unlocked (ডিপোজিট করা হয়েছে)" if has_deposited == 1 else "🔒 Locked (বোনাস ব্যবহার করতে মিনিমাম ডিপোজিট করুন)"
+    if has_deposited == 1:
+        status = "✅ **Unlocked** (উইথড্র ও গেম প্লে করার উপযোগী)"
+    else:
+        status = f"🔒 **Locked** (ব্যবহার করতে অন্তত ৳{MIN_DEPOSIT:.2f} ডিপোজিট করুন)"
     
-    text = f"💳 **আপনার অ্যাকাউন্ট ব্যালেন্স:** ৳{balance:.2f}\n📌 **স্ট্যাটাস:** {status}\n\nবন্ধুদের সাথে রেফার লিংক শেয়ার করে আয় বাড়ান!"
+    text = (
+        f"💳 **আপনার মূল ব্যালেন্স:** ৳{balance:.2f}\n"
+        f"📌 **বোনাস স্ট্যাটাস:** {status}\n\n"
+        f"💡 মিনিমাম ৳{MIN_DEPOSIT:.2f} ডিপোজিট করলেই বোনাসসহ পুরো টাকা আনলক ও উইথড্র করতে পারবেন!"
+    )
     
     keyboard = [[InlineKeyboardButton("🔙 Back to Main Menu", callback_data="main_menu")]]
     await query.edit_message_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
@@ -148,7 +158,13 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ আপনি এই কমান্ড ব্যবহার করার অনুমোদন পাননি।")
         return
         
-    text = "🛠️ **অ্যাডমিন কন্ট্রোল প্যানেল**\n\n১. ম্যাচ অ্যাড করতে:\n`MatchID | Category | Title | Fee | Prize | PerKill | Map | Time | Slots`\n\n২. ইউজারের ডিপোজিট আনলক করতে পাঠাও:\n`UNLOCK | User_ID`"
+    text = (
+        "🛠️ **অ্যাডমিন কন্ট্রোল প্যানেল**\n\n"
+        "১. নতুন ম্যাচ যোগ করতে পাঠান:\n"
+        "`MatchID | Category | Title | Fee | Prize | PerKill | Map | Time | Slots`\n\n"
+        "২. কোনো ইউজার ৫০+ টাকা ডিপোজিট করলে বোনাস আনলক করতে পাঠান:\n"
+        "`UNLOCK | User_ID`"
+    )
     await update.message.reply_text(text, parse_mode="Markdown")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -156,7 +172,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
     
     if user_id == ADMIN_ID:
-        # ডিপোজিট কনফার্ম হলে আনলক করার কমান্ড
+        # ৫০ টাকা ডিপোজিট নিশ্চিত করার পর আনলক কমান্ড
         if text.startswith("UNLOCK"):
             try:
                 target_user = int(text.split("|")[1].strip())
@@ -165,13 +181,22 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 cursor.execute("UPDATE users SET has_deposited = 1 WHERE user_id = ?", (target_user,))
                 conn.commit()
                 conn.close()
-                await update.message.reply_text(f"✅ User ID: `{target_user}` এর বোনাস আনলক করা হয়েছে!")
+                await update.message.reply_text(f"✅ User ID: `{target_user}` এর ৫০ টাকার বোনাস ও ব্যালেন্স আনলক করা হয়েছে!")
+                
+                # প্লেয়ারকে মেসেজ পাঠানো
+                try:
+                    await context.bot.send_message(
+                        chat_id=target_user,
+                        text="🎉 **অভিনন্দন!** আপনার ডিপোজিট সফল হয়েছে এবং আপনার ৫০ টাকা বোনাসসহ মূল ব্যালেন্স সম্পূর্ণ আনলক করে দেওয়া হয়েছে!"
+                    )
+                except Exception:
+                    pass
                 return
             except Exception:
                 await update.message.reply_text("❌ আনলক ফরম্যাট ভুল! লিখুন: `UNLOCK | User_ID`")
                 return
 
-        # নতুন ম্যাচ যোগ করার কোড
+        # ম্যাচ এড করার অপশন
         if "|" in text:
             parts = [p.strip() for p in text.split("|")]
             if len(parts) == 9:
